@@ -5,3 +5,6 @@ requests
 instagrapi
 python-multipart
 Pillow
+asyncpg
+sqlalchemy
+databases
