@@ -13,6 +13,9 @@ import aiohttp
 import time
 import random
 import asyncio
+from databases import Database
+from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer
+from fastapi import Query
 
 app = FastAPI()
 
@@ -29,6 +32,34 @@ SESSIONS_DIR = "sessions"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
+DATABASE_URL = os.getenv("DATABASE_URL",
+                         "postgresql://autoinstauser:0D3LfwDSKrSJC2BAuy5K57PCS8xYqX1l@dpg-d0fs42q4d50c73f80u3g-a:5432/autoinstadb")
+
+database = Database(DATABASE_URL)
+metadata = MetaData()
+
+posts_table = Table("posts", metadata, Column("id", Integer, primary_key=True),
+                    Column("username", String, nullable=False),
+                    Column("password", String, nullable=False))
+
+engine = create_engine(DATABASE_URL)
+metadata.create_all(engine)
+
+
+@app.on_event("startup")
+async def startup():
+    await database.connect()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+@app.get("/posts_ids")
+async def get_post_ids():
+    query = posts_table.select().with_only_columns([posts_table.c.id])
+    rows = await database.fetch_all(query)
+    return {"post_ids": [row["id"] for row in rows]}
 
 def get_client(username: str) -> Client:
     cl = Client()
@@ -49,14 +80,24 @@ def save_client_session(cl: Client, username: str):
 async def read_root():
     return {"message": "Welcome to the Instagram API"}
 
+
+@app.post("/add_post_account")
+async def add_post_account(username: str = Query(...),
+                           password: str = Query(...)):
+    query = posts_table.insert().values(username=username, password=password)
+    await database.execute(query)
+    return {"status": "success", "message": "Account added for posting"}
+
+
 @app.get("/auto_post")
 async def auto_post():
     await get_send_posts()
     return {"status": "success"}
 
+
 async def get_send_posts():
-    with open("cronjob/posts.json", "r") as file:
-        posts = json.load(file)
+    query = posts_table.select()
+    posts = await database.fetch_all(query)
 
     for post in posts:
         username = post["username"]
@@ -75,6 +116,7 @@ async def get_send_posts():
             os.remove(image_path)
         except Exception as e:
             print(f"❌ Échec pour {username} : {e}")
+
 
 async def generate_description():
     seed = random.randint(1000, 999999)
@@ -95,6 +137,7 @@ async def generate_description():
             await asyncio.sleep(2)
     return "Erreur lors de la génération de la description après plusieurs tentatives."
 
+
 async def generate_caption(description):
     seed = random.randint(1000, 999999)
     prompt = f"""Based on the following image description: "{description}", write a short, creative, and unique Instagram caption. Include relevant and diverse hashtags. Avoid repetition or overly generic phrases. Make it feel natural, artistic, fun, or inspiring depending on the content. Each response must be different."""
@@ -113,6 +156,7 @@ async def generate_caption(description):
             print(f"❌ Erreur lors de la génération de la description : {e}")
             await asyncio.sleep(2)
     return "Erreur lors de la génération de la description après plusieurs tentatives."
+
 
 async def generate_image(description):
     seed = random.randint(1000, 999999)
@@ -136,6 +180,7 @@ async def generate_image(description):
                 else:
                     raise Exception(f"Image API error: {resp.status}")
 
+
 @app.post("/test_login")
 async def test_instagram_login(username: str = Form(...),
                                password: str = Form(...)):
@@ -154,6 +199,7 @@ async def test_instagram_login(username: str = Form(...),
         return {"status": "error", "message": "challenge_required"}
     except Exception as e:
         return {"status": "error", "message": f"Login failed: {str(e)}"}
+
 
 @app.post("/verify_challenge")
 async def verify_challenge(username: str = Form(...), code: str = Form(...)):
