@@ -8,3 +8,4 @@ Pillow
 asyncpg
 sqlalchemy
 databases
+psycopg2-binary
