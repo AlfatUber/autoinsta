@@ -57,7 +57,7 @@ async def shutdown():
 
 @app.get("/posts_ids")
 async def get_post_ids():
-    query = posts_table.select().with_only_columns([posts_table.c.id])
+    query = posts_table.select().with_only_columns(posts_table.c.id)
     rows = await database.fetch_all(query)
     return {"post_ids": [row["id"] for row in rows]}
 
