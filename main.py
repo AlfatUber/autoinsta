@@ -14,7 +14,7 @@ import time
 import random
 import asyncio
 from databases import Database
-from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer
+from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, String, Text, select, insert, update
 from fastapi import Query
 
 app = FastAPI()
@@ -32,8 +32,10 @@ SESSIONS_DIR = "sessions"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL",
-                         "postgresql://autoinstauser:0D3LfwDSKrSJC2BAuy5K57PCS8xYqX1l@dpg-d0fs42q4d50c73f80u3g-a:5432/autoinstadb")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://autoinstauser:0D3LfwDSKrSJC2BAuy5K57PCS8xYqX1l@dpg-d0fs42q4d50c73f80u3g-a:5432/autoinstadb"
+)
 
 database = Database(DATABASE_URL)
 metadata = MetaData()
@@ -41,6 +43,14 @@ metadata = MetaData()
 posts_table = Table("posts", metadata, Column("id", Integer, primary_key=True),
                     Column("username", String, nullable=False),
                     Column("password", String, nullable=False))
+metadata = MetaData()
+
+sessions_table = Table(
+    "sessions",
+    metadata,
+    Column("username", String, primary_key=True),
+    Column("session_json", Text),
+)
 
 engine = create_engine(DATABASE_URL)
 metadata.create_all(engine)
@@ -55,25 +65,38 @@ async def startup():
 async def shutdown():
     await database.disconnect()
 
+
 @app.get("/posts_ids")
 async def get_post_ids():
-    query = posts_table.select().with_only_columns(posts_table.c.id)
+    query = posts_table.select().with_only_columns([posts_table.c.id])
     rows = await database.fetch_all(query)
     return {"post_ids": [row["id"] for row in rows]}
 
-def get_client(username: str) -> Client:
+
+async def get_client(username: str) -> Client:
     cl = Client()
-    session_file = Path(SESSIONS_DIR) / f"{username}.json"
-    if session_file.exists():
-        cl.load_settings(session_file)
+    query = select(sessions_table.c.session_json).where(
+        sessions_table.c.username == username)
+    result = await database.fetch_one(query)
+
+    if result:
+        settings = json.loads(result["session_json"])
+        cl.set_settings(settings)
+        try:
+            cl.get_timeline_feed()
+        except Exception:
+            print("Session invalide, il faudra se reconnecter.")
     return cl
 
 
-def save_client_session(cl: Client, username: str):
-    session_file = os.path.join(SESSIONS_DIR, f"{username}.json")
+async def save_client_session(cl: Client, username: str):
     settings = cl.get_settings()
-    with open(session_file, "w") as f:
-        json.dump(settings, f)
+    session_json = json.dumps(settings)
+
+    query = insert(sessions_table).values(
+        username=username, session_json=session_json).on_conflict_do_update(
+            index_elements=['username'], set_={'session_json': session_json})
+    await database.execute(query)
 
 
 @app.get("/")
@@ -184,7 +207,7 @@ async def generate_image(description):
 @app.post("/test_login")
 async def test_instagram_login(username: str = Form(...),
                                password: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
 
     def challenge_handler(username, challenge):
         return "email"
@@ -193,7 +216,7 @@ async def test_instagram_login(username: str = Form(...),
 
     try:
         cl.login(username, password)
-        save_client_session(cl, username)
+        await save_client_session(cl, username)
         return {"status": "success", "message": "Login successful"}
     except ChallengeRequired:
         return {"status": "error", "message": "challenge_required"}
@@ -203,10 +226,10 @@ async def test_instagram_login(username: str = Form(...),
 
 @app.post("/verify_challenge")
 async def verify_challenge(username: str = Form(...), code: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         result = cl.challenge_code_verify(code)
-        save_client_session(cl, username)
+        await save_client_session(cl, username)
         return {
             "status": "success",
             "message": "Challenge verified and session saved"
@@ -229,10 +252,10 @@ async def upload_instagram_post(caption: str = Form(...),
             "message": "Only JPG/JPEG/PNG images are supported."
         }
 
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
-        save_client_session(cl, username)
+        await save_client_session(cl, username)
     except ChallengeRequired:
         return {"status": "error", "message": "challenge_required"}
     except Exception as e:
@@ -255,7 +278,7 @@ async def upload_instagram_post(caption: str = Form(...),
 @app.post("/get_total_stats")
 async def get_total_stats(username: str = Form(...),
                           password: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
     except Exception as e:
@@ -287,7 +310,7 @@ async def get_total_stats(username: str = Form(...),
 async def get_instagram_posts(username: str = Form(...),
                               password: str = Form(...),
                               amount: int = Form(5)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
     except Exception as e:
@@ -343,7 +366,7 @@ async def reply_to_comment(username: str = Form(...),
                            media_id: str = Form(...),
                            comment_id: int = Form(...),
                            reply_text: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
     except Exception as e:
@@ -360,7 +383,7 @@ async def reply_to_comment(username: str = Form(...),
 async def get_info_post(username: str = Form(...),
                         password: str = Form(...),
                         postId: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
     except Exception as e:
@@ -405,7 +428,7 @@ async def comment_on_post(username: str = Form(...),
                           password: str = Form(...),
                           media_id: str = Form(...),
                           comment_text: str = Form(...)):
-    cl = get_client(username)
+    cl = await get_client(username)
     try:
         cl.login(username, password)
     except Exception as e:
