@@ -227,7 +227,7 @@ async def test_instagram_login(username: str = Form(...),
 async def verify_challenge(username: str = Form(...), code: str = Form(...)):
     cl = await get_client(username)
     try:
-        result = cl.challenge_code_verify(code)
+        result = cl.challenge_resolve(code)
         await save_client_session(cl, username)
         return {
             "status": "success",
