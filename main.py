@@ -218,7 +218,6 @@ async def test_instagram_login(username: str = Form(...),
         await save_client_session(cl, username)
         return {"status": "success", "message": "Login successful"}
     except ChallengeRequired:
-        cl.challenge_resolve()
         return {"status": "error", "message": "challenge_required"}
     except Exception as e:
         return {"status": "error", "message": f"Login failed: {str(e)}"}
@@ -227,28 +226,27 @@ async def test_instagram_login(username: str = Form(...),
 @app.post("/verify_challenge")
 async def verify_challenge(username: str = Form(...), code: str = Form(...)):
     cl = await get_client(username)
-    try:
-        result = cl.challenge_resolve_security_code(code)
 
-        if isinstance(result, bool) and result:
-            await save_client_session(cl, username)
-            return {
-                "status": "success",
-                "message": "Challenge verified and session saved"
-            }
+    try:
+        if hasattr(cl, "challenge_resolve_security_code"):
+            cl.challenge_resolve_security_code(code)
         else:
-            return {
-                "status": "error",
-                "message": f"Invalid code or challenge failed: {result}"
-            }
+            cl.challenge_code_handler = lambda u, c: code
+            cl.challenge_resolve()
+
+        await save_client_session(cl, username)
+
+        return {
+            "status": "success",
+            "message": "Challenge verified and session saved"
+        }
+
     except Exception as e:
         return {
             "status": "error",
             "message": f"Challenge verification failed: {str(e)}"
         }
-
-
-
+        
 @app.post("/upload")
 async def upload_instagram_post(caption: str = Form(...),
                                 username: str = Form(...),
