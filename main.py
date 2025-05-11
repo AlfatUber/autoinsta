@@ -218,6 +218,7 @@ async def test_instagram_login(username: str = Form(...),
         await save_client_session(cl, username)
         return {"status": "success", "message": "Login successful"}
     except ChallengeRequired:
+        cl.challenge_resolve()
         return {"status": "error", "message": "challenge_required"}
     except Exception as e:
         return {"status": "error", "message": f"Login failed: {str(e)}"}
@@ -227,17 +228,25 @@ async def test_instagram_login(username: str = Form(...),
 async def verify_challenge(username: str = Form(...), code: str = Form(...)):
     cl = await get_client(username)
     try:
-        result = cl.challenge_resolve(code)
-        await save_client_session(cl, username)
-        return {
-            "status": "success",
-            "message": "Challenge verified and session saved"
-        }
+        result = cl.challenge_resolve_security_code(code)
+
+        if isinstance(result, bool) and result:
+            await save_client_session(cl, username)
+            return {
+                "status": "success",
+                "message": "Challenge verified and session saved"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Invalid code or challenge failed: {result}"
+            }
     except Exception as e:
         return {
             "status": "error",
             "message": f"Challenge verification failed: {str(e)}"
         }
+
 
 
 @app.post("/upload")
