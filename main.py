@@ -43,7 +43,6 @@ metadata = MetaData()
 posts_table = Table("posts", metadata, Column("id", Integer, primary_key=True),
                     Column("username", String, nullable=False),
                     Column("password", String, nullable=False))
-metadata = MetaData()
 
 sessions_table = Table(
     "sessions",
@@ -131,8 +130,8 @@ async def get_send_posts():
             caption = await generate_caption(description)
             image_path = await generate_image(description)
 
-            cl = get_client(username)
-            cl.login(username, password)
+            cl = await get_client(username)
+            await cl.login(username, password)
             cl.photo_upload(image_path, caption)
 
             print(f"✅ Post publié pour {username}")
