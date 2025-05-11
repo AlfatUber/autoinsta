@@ -224,7 +224,7 @@ async def test_instagram_login(username: str = Form(...),
 
 
 @app.post("/verify_challenge")
-async def verify_challenge(username: str = Form(...), code: str = Form(...)):
+async def verify_challenge(username: str = Form(...), password: str = Form(...), code: str = Form(...)):
     cl = await get_client(username)
 
     try:
