@@ -230,9 +230,11 @@ async def verify_challenge(username: str = Form(...), code: str = Form(...)):
     try:
         if hasattr(cl, "challenge_resolve_security_code"):
             cl.challenge_resolve_security_code(code)
-        else:
+        elif:
             cl.challenge_code_handler = lambda u, c: code
             cl.challenge_resolve()
+        else:
+            cl.login(username, password, verification_code=code)
 
         await save_client_session(cl, username)
 
