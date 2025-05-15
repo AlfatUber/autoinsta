@@ -1,5 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Query
 from instagrapi import Client
+from instagrapi.exceptions import ChallengeRequired
 import uvicorn
 import shutil
 import os
@@ -14,7 +15,10 @@ import random
 import asyncio
 from databases import Database
 from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, String, Text, select, insert, update
-from fastapi import Query
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor()
+pending_challenges = {}
 
 app = FastAPI()
 
@@ -45,7 +49,7 @@ sessions_table = Table(
     "sessions",
     metadata,
     Column("username", String, primary_key=True),
-    Column("session_json", Text),
+    Column("cookie", Text),
 )
 
 engine = create_engine(DATABASE_URL)
@@ -65,39 +69,33 @@ async def get_post_ids():
     rows = await database.fetch_all(query)
     return {"post_ids": [row["id"] for row in rows]}
 
-async def get_client(username: str, password: str | None = None) -> Client:
+async def get_client(username: str, password: str) -> Client:
     cl = Client()
-    query = select(sessions_table.c.session_json).where(sessions_table.c.username == username)
-    result = await database.fetch_one(query)
 
-    if result:
+    query = sessions_table.select().where(sessions_table.c.username == username)
+    row = await database.fetch_one(query)
+
+    if row and row["cookie"]:
+        cl.set_settings(json.loads(row["cookie"]))
         try:
-            cl.set_settings(json.loads(result["session_json"]))
-            cl.get_timeline_feed()
-            print("✅ Session reused from database")
-            return cl
-        except Exception as e:
-            print(f"⚠️ Failed to reuse session, relogging: {e}")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(executor, cl.account_info)
+            return cl  
+        except Exception:
+            pass  
 
-    if not password:
-        raise Exception("No valid session and password not provided.")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(executor, cl.login, username, password)
 
-    try:
-        cl.login(username, password)
-        await save_client_session(cl, username)
-        print("🔐 Logged in and session saved")
-        return cl
-    except Exception as e:
-        raise Exception(f"Login failed: {e}")
+    
+    cookie_json = json.dumps(cl.get_settings())
+    query = sessions_table.insert().values(username=username, cookie=cookie_json)
 
-async def save_client_session(cl: Client, username: str):
-    settings = cl.get_settings()
-    session_json = json.dumps(settings)
-
-    query = insert(sessions_table).values(
-        username=username, session_json=session_json).on_conflict_do_update(
-            index_elements=['username'], set_={'session_json': session_json})
+    delete_query = sessions_table.delete().where(sessions_table.c.username == username)
+    await database.execute(delete_query)
     await database.execute(query)
+
+    return cl
 
 @app.get("/")
 async def read_root():
@@ -197,11 +195,14 @@ async def generate_image(description):
                     raise Exception(f"Image API error: {resp.status}")
 
 @app.post("/test_login")
-async def test_instagram_login(username: str = Form(...),
-                               password: str = Form(...)):
+async def test_instagram_login(username: str = Form(...), password: str = Form(...)):
     try:
         cl = await get_client(username, password)
         user_info = cl.account_info()
+
+        if username in pending_challenges:
+            del pending_challenges[username]
+
         return {
             "status": "success",
             "message": "Login successful",
@@ -211,9 +212,43 @@ async def test_instagram_login(username: str = Form(...),
                 "pk": user_info.pk
             }
         }
+    except ChallengeRequired:
+        cl = Client()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(executor, cl.login, username, password)
+        pending_challenges[username] = cl
+
+        return {
+            "status": "challenge_required",
+            "message": "Instagram requires verification code. Please submit it using /verify_challenge."
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.post("/verify_challenge")
+async def verify_challenge(username: str = Form(...), code: str = Form(...)):
+    cl = pending_challenges.get(username)
+    if not cl:
+        return {"status": "error", "message": "No pending challenge found for this user."}
+
+    try:
+        cl.challenge_code_handler = lambda: code
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(executor, cl.challenge_resolve)
+
+        cookie_json = json.dumps(cl.get_settings())
+        delete_query = sessions_table.delete().where(sessions_table.c.username == username)
+        await database.execute(delete_query)
+        insert_query = sessions_table.insert().values(username=username, cookie=cookie_json)
+        await database.execute(insert_query)
+
+        del pending_challenges[username]
+
+        return {"status": "success", "message": "Challenge passed, login complete."}
+    except Exception as e:
+        return {"status": "error", "message": f"Challenge failed: {e}"}
+        
 @app.post("/upload")
 async def upload_instagram_post(caption: str = Form(...),
                                 username: str = Form(...),
