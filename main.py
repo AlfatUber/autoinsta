@@ -46,7 +46,7 @@ posts_table = Table("posts", metadata, Column("id", Integer, primary_key=True),
                     Column("password", String, nullable=False))
 
 sessions_table = Table(
-    "sessions",
+    "new_sessions",
     metadata,
     Column("username", String, primary_key=True),
     Column("cookie", Text),
