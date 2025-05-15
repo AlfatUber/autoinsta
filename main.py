@@ -1,6 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired
 import uvicorn
 import shutil
 import os
@@ -28,9 +27,7 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = "uploads"
-SESSIONS_DIR = "sessions"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(SESSIONS_DIR, exist_ok=True)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -54,16 +51,13 @@ sessions_table = Table(
 engine = create_engine(DATABASE_URL)
 metadata.create_all(engine)
 
-
 @app.on_event("startup")
 async def startup():
     await database.connect()
 
-
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
-
 
 @app.get("/posts_ids")
 async def get_post_ids():
@@ -71,22 +65,30 @@ async def get_post_ids():
     rows = await database.fetch_all(query)
     return {"post_ids": [row["id"] for row in rows]}
 
-
-async def get_client(username: str) -> Client:
+async def get_client(username: str, password: str | None = None) -> Client:
     cl = Client()
-    query = select(sessions_table.c.session_json).where(
-        sessions_table.c.username == username)
+    query = select(sessions_table.c.session_json).where(sessions_table.c.username == username)
     result = await database.fetch_one(query)
 
     if result:
-        settings = json.loads(result["session_json"])
-        cl.set_settings(settings)
         try:
+            cl.set_settings(json.loads(result["session_json"]))
             cl.get_timeline_feed()
-        except Exception:
-            print("Session invalide, il faudra se reconnecter.")
-    return cl
+            print("✅ Session reused from database")
+            return cl
+        except Exception as e:
+            print(f"⚠️ Failed to reuse session, relogging: {e}")
 
+    if not password:
+        raise Exception("No valid session and password not provided.")
+
+    try:
+        cl.login(username, password)
+        await save_client_session(cl, username)
+        print("🔐 Logged in and session saved")
+        return cl
+    except Exception as e:
+        raise Exception(f"Login failed: {e}")
 
 async def save_client_session(cl: Client, username: str):
     settings = cl.get_settings()
@@ -97,11 +99,9 @@ async def save_client_session(cl: Client, username: str):
             index_elements=['username'], set_={'session_json': session_json})
     await database.execute(query)
 
-
 @app.get("/")
 async def read_root():
     return {"message": "Welcome to the Instagram API"}
-
 
 @app.post("/add_post_account")
 async def add_post_account(username: str = Query(...),
@@ -110,12 +110,10 @@ async def add_post_account(username: str = Query(...),
     await database.execute(query)
     return {"status": "success", "message": "Account added for posting"}
 
-
 @app.get("/auto_post")
 async def auto_post():
     await get_send_posts()
     return {"status": "success"}
-
 
 async def get_send_posts():
     query = posts_table.select()
@@ -130,15 +128,13 @@ async def get_send_posts():
             caption = await generate_caption(description)
             image_path = await generate_image(description)
 
-            cl = await get_client(username)
-            await cl.login(username, password)
+            cl = await get_client(username, password)
             cl.photo_upload(image_path, caption)
 
             print(f"✅ Post publié pour {username}")
             os.remove(image_path)
         except Exception as e:
             print(f"❌ Échec pour {username} : {e}")
-
 
 async def generate_description():
     seed = random.randint(1000, 999999)
@@ -159,7 +155,6 @@ async def generate_description():
             await asyncio.sleep(2)
     return "Erreur lors de la génération de la description après plusieurs tentatives."
 
-
 async def generate_caption(description):
     seed = random.randint(1000, 999999)
     prompt = f"""Based on the following image description: "{description}", write a short, creative, and unique Instagram caption. Include relevant and diverse hashtags. Avoid repetition or overly generic phrases. Make it feel natural, artistic, fun, or inspiring depending on the content. Each response must be different."""
@@ -178,7 +173,6 @@ async def generate_caption(description):
             print(f"❌ Erreur lors de la génération de la description : {e}")
             await asyncio.sleep(2)
     return "Erreur lors de la génération de la description après plusieurs tentatives."
-
 
 async def generate_image(description):
     seed = random.randint(1000, 999999)
@@ -202,47 +196,24 @@ async def generate_image(description):
                 else:
                     raise Exception(f"Image API error: {resp.status}")
 
-
 @app.post("/test_login")
 async def test_instagram_login(username: str = Form(...),
                                password: str = Form(...)):
-    cl = await get_client(username)
-
-    def challenge_handler(username, challenge):
-        return "email"
-
-    cl.challenge_code_handler = challenge_handler
-
     try:
-        cl.login(username, password)
-        await save_client_session(cl, username)
-        return {"status": "success", "message": "Login successful"}
-    except ChallengeRequired:
-        return {"status": "error", "message": "challenge_required"}
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
-
-
-@app.post("/verify_challenge")
-async def verify_challenge(username: str = Form(...), password: str = Form(...), code: str = Form(...)):
-    cl = await get_client(username)
-
-    try:
-        cl.login(username, password, verification_code=code)
-
-        await save_client_session(cl, username)
-
+        cl = await get_client(username, password)
+        user_info = cl.account_info()
         return {
             "status": "success",
-            "message": "Challenge verified and session saved"
+            "message": "Login successful",
+            "user": {
+                "username": user_info.username,
+                "full_name": user_info.full_name,
+                "pk": user_info.pk
+            }
         }
-
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Challenge verification failed: {str(e)}"
-        }
-        
+        return {"status": "error", "message": str(e)}
+
 @app.post("/upload")
 async def upload_instagram_post(caption: str = Form(...),
                                 username: str = Form(...),
@@ -254,14 +225,7 @@ async def upload_instagram_post(caption: str = Form(...),
             "message": "Only JPG/JPEG/PNG images are supported."
         }
 
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-        await save_client_session(cl, username)
-    except ChallengeRequired:
-        return {"status": "error", "message": "challenge_required"}
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     file_path = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_path, "wb") as buffer:
@@ -276,15 +240,10 @@ async def upload_instagram_post(caption: str = Form(...),
     os.remove(file_path)
     return {"status": "success", "media_id": media.pk}
 
-
 @app.post("/get_total_stats")
 async def get_total_stats(username: str = Form(...),
                           password: str = Form(...)):
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     try:
         user_id = cl.user_id_from_username(username)
@@ -312,11 +271,7 @@ async def get_total_stats(username: str = Form(...),
 async def get_instagram_posts(username: str = Form(...),
                               password: str = Form(...),
                               amount: int = Form(5)):
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     user_id = cl.user_id_from_username(username)
     medias = cl.user_medias(user_id, amount)
@@ -368,11 +323,7 @@ async def reply_to_comment(username: str = Form(...),
                            media_id: str = Form(...),
                            comment_id: int = Form(...),
                            reply_text: str = Form(...)):
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     try:
         cl.comment_reply(media_id, comment_id, reply_text)
@@ -385,11 +336,7 @@ async def reply_to_comment(username: str = Form(...),
 async def get_info_post(username: str = Form(...),
                         password: str = Form(...),
                         postId: str = Form(...)):
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     try:
         media = cl.media_info(postId)
@@ -430,11 +377,7 @@ async def comment_on_post(username: str = Form(...),
                           password: str = Form(...),
                           media_id: str = Form(...),
                           comment_text: str = Form(...)):
-    cl = await get_client(username)
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        return {"status": "error", "message": f"Login failed: {str(e)}"}
+    cl = await get_client(username, password)
 
     try:
         cl.media_comment(media_id, comment_text)
