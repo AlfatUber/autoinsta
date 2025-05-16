@@ -132,11 +132,17 @@ async def auto_post():
     await get_send_posts()
     return {"status": "success"}
 
-import datetime
+def parse_cron_time(cron_time_str):
+    parts = cron_time_str.split(':')
+    if len(parts) != 2:
+        raise ValueError(f"Invalid cron_time format: {cron_time_str}")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    return hours * 60 + minutes
 
 def should_post(post):
     start_time_str = post["time"]       
-    interval_minutes = int(post["cron_time"]) 
+    interval_minutes = parse_cron_time(post["cron_time"])
 
     now = datetime.datetime.now()
 
