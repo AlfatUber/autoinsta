@@ -44,8 +44,8 @@ DATABASE_URL = os.getenv(
 database = Database(DATABASE_URL)
 metadata = MetaData()
 
-posts_table = Table("cron", metadata, Column("id", Integer, primary_key=True),
-                    Column("username", String, nullable=False),
+posts_table = Table("new_cron", metadata, Column("id", Integer, primary_key=True),
+                    Column("username", String, nullable=False, unique=True),
                     Column("password", String, nullable=False),
                     Column("time", String, nullable=False),
                     Column("cron_time", String, nullable=False),)
