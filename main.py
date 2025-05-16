@@ -254,7 +254,8 @@ async def test_instagram_login(username: str = Form(...), password: str = Form(.
             "user": {
                 "username": user_info.username,
                 "full_name": user_info.full_name,
-                "pk": user_info.pk
+                "pk": user_info.pk,
+                "profile_pic_url": user_info.profile_pic_url
             }
         }
     except ChallengeRequired:
