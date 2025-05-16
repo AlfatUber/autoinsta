@@ -14,8 +14,10 @@ import time
 import random
 import asyncio
 from databases import Database
-from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, String, Text, select, insert, update
+from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, Text, select, update, insert
+
 from concurrent.futures import ThreadPoolExecutor
+import datetime
 
 executor = ThreadPoolExecutor()
 pending_challenges = {}
@@ -41,9 +43,11 @@ DATABASE_URL = os.getenv(
 database = Database(DATABASE_URL)
 metadata = MetaData()
 
-posts_table = Table("posts", metadata, Column("id", Integer, primary_key=True),
+posts_table = Table("cron", metadata, Column("id", Integer, primary_key=True),
                     Column("username", String, nullable=False),
-                    Column("password", String, nullable=False))
+                    Column("password", String, nullable=False),
+                    Column("time", String, nullable=False),
+                    Column("cron_time", String, nullable=False),)
 
 sessions_table = Table(
     "new_sessions",
@@ -62,12 +66,6 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
-
-@app.get("/posts_ids")
-async def get_post_ids():
-    query = posts_table.select().with_only_columns([posts_table.c.id])
-    rows = await database.fetch_all(query)
-    return {"post_ids": [row["id"] for row in rows]}
 
 async def get_client(username: str, password: str) -> Client:
     cl = Client()
@@ -101,17 +99,56 @@ async def get_client(username: str, password: str) -> Client:
 async def read_root():
     return {"message": "Welcome to the Instagram API"}
 
-@app.post("/add_post_account")
-async def add_post_account(username: str = Query(...),
-                           password: str = Query(...)):
-    query = posts_table.insert().values(username=username, password=password)
-    await database.execute(query)
-    return {"status": "success", "message": "Account added for posting"}
+@app.post("/set_cron")
+async def add_cron_account(username: str = Query(...),
+                           password: str = Query(...),
+                           time: str = Query(...),
+                           cron_time: str = Query(...)):
+    stmt = insert(posts_table).values(
+        username=username,
+        password=password,
+        time=time,
+        cron_time=cron_time
+    ).on_conflict_do_update(
+        index_elements=["username"],
+        set_={
+            "password": password,
+            "time": time,
+            "cron_time": cron_time
+        }
+    )
+    await database.execute(stmt)
+    return {"status": "success", "message": "Account added or updated for posting"}
+
+@app.get("/posts_ids")
+async def get_post_ids():
+    query = posts_table.select().with_only_columns([posts_table.c.id])
+    rows = await database.fetch_all(query)
+    return {"post_ids": [row["id"] for row in rows]}
 
 @app.get("/auto_post")
 async def auto_post():
     await get_send_posts()
     return {"status": "success"}
+
+import datetime
+
+def should_post(post):
+    start_time_str = post["time"]       
+    interval_minutes = int(post["cron_time"]) 
+
+    now = datetime.datetime.now()
+
+    start_hour, start_minute = map(int, start_time_str.split(":"))
+    start_time = now.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+
+    if start_time > now:
+        start_time -= datetime.timedelta(days=1)
+
+    minutes_since_start = int((now - start_time).total_seconds() // 60)
+
+    return minutes_since_start % interval_minutes == 0
+
 
 async def get_send_posts():
     query = posts_table.select()
@@ -121,18 +158,19 @@ async def get_send_posts():
         username = post["username"]
         password = post["password"]
 
-        try:
-            description = await generate_description()
-            caption = await generate_caption(description)
-            image_path = await generate_image(description)
+        if should_post(post):
+            try:
+                description = await generate_description()
+                caption = await generate_caption(description)
+                image_path = await generate_image(description)
 
-            cl = await get_client(username, password)
-            cl.photo_upload(image_path, caption)
+                cl = await get_client(username, password)
+                cl.photo_upload(image_path, caption)
 
-            print(f"✅ Post publié pour {username}")
-            os.remove(image_path)
-        except Exception as e:
-            print(f"❌ Échec pour {username} : {e}")
+                print(f"✅ Post publié pour {username}")
+                os.remove(image_path)
+            except Exception as e:
+                print(f"❌ Échec pour {username} : {e}")
 
 async def generate_description():
     seed = random.randint(1000, 999999)
