@@ -15,6 +15,7 @@ import random
 import asyncio
 from databases import Database
 from sqlalchemy import create_engine, MetaData, Table, Column, String, Integer, Text, select, update, insert
+from sqlalchemy.dialects.postgresql import insert
 
 from concurrent.futures import ThreadPoolExecutor
 import datetime
