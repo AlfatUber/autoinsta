@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form, Query
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired
+from instagrapi.exceptions import ChallengeRequired, LoginRequired
 import uvicorn
 import shutil
 import os
