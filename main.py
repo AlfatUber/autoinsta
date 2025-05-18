@@ -79,20 +79,25 @@ async def get_client(username: str, password: str) -> Client:
         try:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(executor, cl.account_info)
-            return cl  
-        except Exception:
+            return cl
+        except LoginRequired:
             pass  
-
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(executor, cl.login, username, password)
-
-    
-    cookie_json = json.dumps(cl.get_settings())
-    query = sessions_table.insert().values(username=username, cookie=cookie_json)
+        except Exception:
+            pass
 
     delete_query = sessions_table.delete().where(sessions_table.c.username == username)
     await database.execute(delete_query)
-    await database.execute(query)
+
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(executor, cl.login, username, password)
+    except ChallengeRequired:
+        pending_challenges[username] = cl
+        raise
+
+    cookie_json = json.dumps(cl.get_settings())
+    insert_query = sessions_table.insert().values(username=username, cookie=cookie_json)
+    await database.execute(insert_query)
 
     return cl
 
