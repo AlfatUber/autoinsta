@@ -116,23 +116,23 @@ async def get_client(username: str, password: str) -> Client:
     row = await database.fetch_one(query)
 
     if row:
-        cookies = json.loads(row["cookie"])
-        cl.set_cookies(cookies)
+        settings = json.loads(row["cookie"])
+        cl.load_settings(settings)
         try:
+            cl.get_timeline_feed()
+        except (ChallengeRequired, LoginRequired):
             cl.login(username, password)
-        except Exception:
-            cl.login(username, password)
-            new_cookies = json.dumps(cl.get_cookies())
+            new_settings = cl.dump_settings()
             update_query = (
                 sessions_table.update()
                 .where(sessions_table.c.username == username)
-                .values(cookie=new_cookies)
+                .values(cookie=json.dumps(new_settings))
             )
             await database.execute(update_query)
     else:
         cl.login(username, password)
-        new_cookies = json.dumps(cl.get_cookies())
-        insert_query = sessions_table.insert().values(username=username, cookie=new_cookies)
+        new_settings = cl.dump_settings()
+        insert_query = sessions_table.insert().values(username=username, cookie=json.dumps(new_settings))
         await database.execute(insert_query)
 
     return cl
