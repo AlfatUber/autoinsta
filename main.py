@@ -51,7 +51,7 @@ posts_table = Table("new_cron", metadata, Column("id", Integer, primary_key=True
                     Column("cron_time", String, nullable=False),)
 
 sessions_table = Table(
-    "new_sessions",
+    "cookie_sessions",
     metadata,
     Column("username", String, primary_key=True),
     Column("cookie", Text),
@@ -111,9 +111,35 @@ from instagrapi.exceptions import ChallengeRequired, LoginRequired
 
 #     return cl
 
-async def get_client(username: str, password: str) -> Client:
+async def get_client(username: str, password: str, db: AsyncSession) -> Client:
     cl = Client()
-    cl.login(username, password)
+
+    result = await db.execute(select(sessions_table.c.cookie).where(sessions_table.c.username == username))
+    cookie_json = result.scalar_one_or_none()
+
+    if cookie_json:
+        import json
+        cookies = json.loads(cookie_json)
+        cl.set_cookies(cookies)
+        try:
+            cl.login(username, password)
+        except Exception:
+            cl.login(username, password)
+            new_cookie = json.dumps(cl.get_cookies())
+            await db.execute(
+                update(sessions_table)
+                .where(sessions_table.c.username == username)
+                .values(cookie=new_cookie)
+            )
+            await db.commit()
+    else:
+        cl.login(username, password)
+        new_cookie = json.dumps(cl.get_cookies())
+        await db.execute(
+            insert(sessions_table)
+            .values(username=username, cookie=new_cookie)
+        )
+        await db.commit()
 
     return cl
 
