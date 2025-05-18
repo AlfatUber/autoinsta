@@ -68,72 +68,42 @@ async def startup():
 async def shutdown():
     await database.disconnect()
 
-# async def get_client(username: str, password: str) -> Client:
-#     cl = Client()
-
-#     query = sessions_table.select().where(sessions_table.c.username == username)
-#     row = await database.fetch_one(query)
-
-#     loop = asyncio.get_event_loop()
-
-#     if row and row["cookie"]:
-#         try:
-#             print("[INFO] Chargement des cookies depuis la base")
-#             cl.set_settings(json.loads(row["cookie"]))
-#             await loop.run_in_executor(executor, cl.account_info)
-#             print("[INFO] Cookies valides")
-#             return cl
-#         except LoginRequired:
-#             print("[WARNING] Cookies expirés, suppression...")
-#         except Exception as e:
-#             print(f"[ERROR] Erreur lors de l'utilisation des cookies : {e}")
-
-#         delete_query = sessions_table.delete().where(sessions_table.c.username == username)
-#         await database.execute(delete_query)
-
-#     try:
-#         print("[INFO] Connexion manuelle...")
-#         await loop.run_in_executor(executor, cl.login, username, password)
-#     except ChallengeRequired:
-#         print("[INFO] Challenge requis, en attente de vérification")
-#         pending_challenges[username] = cl
-#         raise
-#     except Exception as e:
-#         print(f"[ERROR] Échec du login : {e}")
-#         raise
-
-#     cookie_json = json.dumps(cl.get_settings())
-#     insert_query = sessions_table.insert().values(username=username, cookie=cookie_json)
-#     await database.execute(insert_query)
-#     print("[INFO] Connexion réussie, cookies sauvegardés")
-
-#     return cl
-
 async def get_client(username: str, password: str) -> Client:
     cl = Client()
-
     query = sessions_table.select().where(sessions_table.c.username == username)
     row = await database.fetch_one(query)
+    loop = asyncio.get_event_loop()
 
-    if row:
-        settings = json.loads(row["cookie"])
-        cl.load_settings(settings)
+    if row and row["cookie"]:
         try:
-            cl.get_timeline_feed()
-        except (ChallengeRequired, LoginRequired):
-            cl.login(username, password)
-            new_settings = cl.dump_settings()
-            update_query = (
-                sessions_table.update()
-                .where(sessions_table.c.username == username)
-                .values(cookie=json.dumps(new_settings))
-            )
-            await database.execute(update_query)
-    else:
-        cl.login(username, password)
-        new_settings = cl.dump_settings()
-        insert_query = sessions_table.insert().values(username=username, cookie=json.dumps(new_settings))
-        await database.execute(insert_query)
+            print("[INFO] Chargement des cookies depuis la base")
+            cl.set_settings(json.loads(row["cookie"]))
+            await loop.run_in_executor(executor, cl.account_info)
+            print("[INFO] Cookies valides, connexion sans login")
+            return cl
+        except LoginRequired:
+            print("[WARNING] Cookies expirés, suppression en base")
+        except Exception as e:
+            print(f"[ERROR] Erreur lors de l'utilisation des cookies : {e}")
+
+        delete_query = sessions_table.delete().where(sessions_table.c.username == username)
+        await database.execute(delete_query)
+
+    try:
+        print("[INFO] Connexion manuelle...")
+        await loop.run_in_executor(executor, cl.login, username, password)
+    except ChallengeRequired:
+        print("[INFO] Challenge requis, attente de vérification")
+        pending_challenges[username] = cl
+        raise
+    except Exception as e:
+        print(f"[ERROR] Échec du login : {e}")
+        raise
+
+    cookie_json = json.dumps(cl.get_settings())
+    insert_query = sessions_table.insert().values(username=username, cookie=cookie_json)
+    await database.execute(insert_query)
+    print("[INFO] Connexion réussie, cookies sauvegardés")
 
     return cl
 
