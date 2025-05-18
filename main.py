@@ -68,8 +68,6 @@ async def startup():
 async def shutdown():
     await database.disconnect()
 
-from instagrapi.exceptions import ChallengeRequired, LoginRequired
-
 # async def get_client(username: str, password: str) -> Client:
 #     cl = Client()
 
@@ -111,35 +109,31 @@ from instagrapi.exceptions import ChallengeRequired, LoginRequired
 
 #     return cl
 
-async def get_client(username: str, password: str, db: AsyncSession) -> Client:
+async def get_client(username: str, password: str) -> Client:
     cl = Client()
 
-    result = await db.execute(select(sessions_table.c.cookie).where(sessions_table.c.username == username))
-    cookie_json = result.scalar_one_or_none()
+    query = sessions_table.select().where(sessions_table.c.username == username)
+    row = await database.fetch_one(query)
 
-    if cookie_json:
-        import json
-        cookies = json.loads(cookie_json)
+    if row:
+        cookies = json.loads(row["cookie"])
         cl.set_cookies(cookies)
         try:
             cl.login(username, password)
         except Exception:
             cl.login(username, password)
-            new_cookie = json.dumps(cl.get_cookies())
-            await db.execute(
-                update(sessions_table)
+            new_cookies = json.dumps(cl.get_cookies())
+            update_query = (
+                sessions_table.update()
                 .where(sessions_table.c.username == username)
-                .values(cookie=new_cookie)
+                .values(cookie=new_cookies)
             )
-            await db.commit()
+            await database.execute(update_query)
     else:
         cl.login(username, password)
-        new_cookie = json.dumps(cl.get_cookies())
-        await db.execute(
-            insert(sessions_table)
-            .values(username=username, cookie=new_cookie)
-        )
-        await db.commit()
+        new_cookies = json.dumps(cl.get_cookies())
+        insert_query = sessions_table.insert().values(username=username, cookie=new_cookies)
+        await database.execute(insert_query)
 
     return cl
 
